@@ -30,7 +30,6 @@ func (m *InMemoryStorage) Set(ctx context.Context, key string, value int, ttl ti
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data[key] = value
-	// Optionally, handle TTL expiration logic here
 	return nil
 }
 

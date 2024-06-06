@@ -11,6 +11,7 @@ Este rate limiter é configurável para limitar o número máximo de requisiçõ
 - Armazenamento e consulta das informações de limite em um banco de dados Redis.
 - Middleware para integração fácil com servidores web.
 - Resposta adequada com código HTTP 429 e mensagem explicativa ao exceder o limite de requisições.
+- Failover para armazenamento em memória em caso de falha no Redis.
 
 
 ## Variáveis de Ambiente
@@ -22,8 +23,6 @@ As seguintes variáveis de ambiente devem ser configuradas:
 - `IP_RATE_LIMIT`: O número máximo de requisições permitidas por segundo por IP (ex: `5`).
 - `TOKEN_RATE_LIMIT`: O número máximo de requisições permitidas por segundo por token (ex: `10`).
 - `BLOCK_DURATION`: O tempo de bloqueio em segundos quando o limite é excedido (ex: `60`).
-
-## Exemplo de `.env`
 
 
 ## Executando a Aplicação
@@ -42,13 +41,16 @@ do
    curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080
 done
 
+
 ## TEST POR TOKEN
 #!/bin/bash
-TOKEN="testtoken"
-for i in {1..10}
+TOKEN="token123"
+for i in {1..102}
 do
-   curl -s -H "API_KEY: $TOKEN" -o /dev/null -w "%{http_code}\n" http://localhost:8080
+   response=$(curl -s -H "API_KEY: $TOKEN" -o /dev/null -w "%{http_code}\n" http://localhost:8080)
+   echo "Request $i: $response"
 done
+
 
 ## TEST APP
 ```sh

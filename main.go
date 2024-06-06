@@ -1,29 +1,42 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
-	"rate-limiter/handler"
+	"rate-limiter/middleware"
 	"rate-limiter/persistence"
 
 	"github.com/go-redis/redis/v8"
 )
 
-var ctx = context.Background()
-
 func main() {
-	// Initialize Redis client
-	rdb := redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
-	})
-	primaryStorage := persistence.NewRedisStorage(rdb)
+	redisHost := os.Getenv("REDIS_HOST")
+	redisPort := os.Getenv("REDIS_PORT")
+	redisAddr := redisHost + ":" + redisPort
 
-	// Initialize in-memory storage
+	rdb := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+
+	primaryStorage := persistence.NewRedisStorage(rdb)
 	secondaryStorage := persistence.NewInMemoryStorage()
 
-	http.Handle("/", handler.NewHandler(primaryStorage, secondaryStorage))
+	tokenLimits := map[string]int{
+		"token123": 10,
+	}
+	tokenTTLs := map[string]time.Duration{
+		"token123": time.Minute,
+	}
+
+	rateLimiterMiddleware := middleware.RateLimiterMiddleware(primaryStorage, secondaryStorage, 5, time.Minute, tokenLimits, tokenTTLs)
+
+	http.Handle("/", rateLimiterMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello, world!"))
+	})))
+
+	log.Println("Server is running on port 8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
