@@ -1,44 +1,29 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+
 	"rate-limiter/handler"
-	"rate-limiter/limiter"
-	"rate-limiter/middleware"
+	"rate-limiter/persistence"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/joho/godotenv"
 )
 
+var ctx = context.Background()
+
 func main() {
-	// Carregar variáveis de ambiente do arquivo .env
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Erro ao carregar o arquivo .env: %v", err)
-	}
-
-	// Conexão com o Redis
+	// Initialize Redis client
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
-		Password: "",
-		DB:       0,
+		Addr: os.Getenv("REDIS_HOST") + ":" + os.Getenv("REDIS_PORT"),
 	})
+	primaryStorage := persistence.NewRedisStorage(rdb)
 
-	// Configuração do Rate Limiter
-	ipRateLimit := os.Getenv("IP_RATE_LIMIT")
-	tokenRateLimit := os.Getenv("TOKEN_RATE_LIMIT")
-	blockDuration := os.Getenv("BLOCK_DURATION")
+	// Initialize in-memory storage
+	secondaryStorage := persistence.NewInMemoryStorage()
 
-	rl, err := limiter.NewRateLimiter(rdb, ipRateLimit, tokenRateLimit, blockDuration)
-	if err != nil {
-		log.Fatalf("Erro ao criar o Rate Limiter: %v", err)
-	}
-
-	// Configuração do Middleware
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", handler.HomeHandler)
-	log.Println("Servidor iniciado na porta 8080")
-	http.ListenAndServe(":8080", middleware.RateLimiterMiddleware(rl)(mux))
+	http.Handle("/", handler.NewHandler(primaryStorage, secondaryStorage))
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }

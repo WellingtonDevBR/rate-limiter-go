@@ -2,78 +2,47 @@ package limiter
 
 import (
 	"context"
-	"fmt"
-	"log"
-	"strconv"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"rate-limiter/persistence"
 )
 
 type RateLimiter struct {
-	client         *redis.Client
-	ipRateLimit    int
-	tokenRateLimit int
-	blockDuration  time.Duration
+	Storage persistence.Storage
+	Limit   int
+	TTL     time.Duration
 }
 
-func NewRateLimiter(client *redis.Client, ipRateLimit, tokenRateLimit, blockDuration string) (*RateLimiter, error) {
-	ipRate, err := strconv.Atoi(ipRateLimit)
-	if err != nil {
-		return nil, err
-	}
-	tokenRate, err := strconv.Atoi(tokenRateLimit)
-	if err != nil {
-		return nil, err
-	}
-	blockDur, err := strconv.Atoi(blockDuration)
-	if err != nil {
-		return nil, err
-	}
+func NewRateLimiter(storage persistence.Storage, limit int, ttl time.Duration) *RateLimiter {
 	return &RateLimiter{
-		client:         client,
-		ipRateLimit:    ipRate,
-		tokenRateLimit: tokenRate,
-		blockDuration:  time.Duration(blockDur) * time.Second,
-	}, nil
+		Storage: storage,
+		Limit:   limit,
+		TTL:     ttl,
+	}
 }
 
-func (rl *RateLimiter) AllowIP(ip string) bool {
-	ctx := context.Background()
-	key := fmt.Sprintf("ip:%s", ip)
-	count, err := rl.client.Incr(ctx, key).Result()
+func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
+	result, err := rl.Storage.Get(ctx, key)
 	if err != nil {
-		log.Printf("Erro ao incrementar a chave para IP %s: %v", ip, err)
-		return false
+		return false, err
 	}
-	log.Printf("Contador para IP %s: %d", ip, count)
-	if count == 1 {
-		rl.client.Expire(ctx, key, rl.blockDuration)
-		log.Printf("Definido expiração para chave IP %s em %v", ip, rl.blockDuration)
-	}
-	if count > int64(rl.ipRateLimit) {
-		log.Printf("IP %s atingiu o limite de requisições: %d", ip, count)
-		return false
-	}
-	return true
-}
 
-func (rl *RateLimiter) AllowToken(token string) bool {
-	ctx := context.Background()
-	key := fmt.Sprintf("token:%s", token)
-	count, err := rl.client.Incr(ctx, key).Result()
+	if result == 0 {
+		err = rl.Storage.Set(ctx, key, 1, rl.TTL)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if result >= rl.Limit {
+		return false, nil
+	}
+
+	err = rl.Storage.Incr(ctx, key)
 	if err != nil {
-		log.Printf("Erro ao incrementar a chave para token %s: %v", token, err)
-		return false
+		return false, err
 	}
-	log.Printf("Contador para token %s: %d", token, count)
-	if count == 1 {
-		rl.client.Expire(ctx, key, rl.blockDuration)
-		log.Printf("Definido expiração para chave token %s em %v", token, rl.blockDuration)
-	}
-	if count > int64(rl.tokenRateLimit) {
-		log.Printf("Token %s atingiu o limite de requisições: %d", token, count)
-		return false
-	}
-	return true
+
+	return true, nil
 }

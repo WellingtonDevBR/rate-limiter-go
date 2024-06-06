@@ -1,10 +1,13 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
+	"rate-limiter/middleware"
+	"rate-limiter/persistence"
 )
 
-func HomeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Welcome to the rate-limited service!")
+func NewHandler(primary, secondary persistence.Storage) http.Handler {
+	return middleware.RateLimiterMiddleware(primary, secondary)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello, World!"))
+	}))
 }

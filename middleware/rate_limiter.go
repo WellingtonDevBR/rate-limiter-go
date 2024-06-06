@@ -1,44 +1,78 @@
 package middleware
 
 import (
-	"log"
-	"net"
+	"context"
 	"net/http"
-	"rate-limiter/limiter"
-	"strings"
+	"time"
+
+	"rate-limiter/persistence"
+
+	"github.com/go-redis/redis/v8"
 )
 
-func RateLimiterMiddleware(rl *limiter.RateLimiter) func(http.Handler) http.Handler {
+type RateLimiter struct {
+	PrimaryStorage   persistence.Storage
+	SecondaryStorage persistence.Storage
+	Limit            int
+	TTL              time.Duration
+}
+
+func NewRateLimiter(primary, secondary persistence.Storage, limit int, ttl time.Duration) *RateLimiter {
+	return &RateLimiter{
+		PrimaryStorage:   primary,
+		SecondaryStorage: secondary,
+		Limit:            limit,
+		TTL:              ttl,
+	}
+}
+
+func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
+	allowed, err := rl.tryAllow(ctx, rl.PrimaryStorage, key)
+	if err == nil {
+		return allowed, nil
+	}
+	// If primary storage fails, use secondary storage
+	return rl.tryAllow(ctx, rl.SecondaryStorage, key)
+}
+
+func (rl *RateLimiter) tryAllow(ctx context.Context, storage persistence.Storage, key string) (bool, error) {
+	result, err := storage.Get(ctx, key)
+	if err != nil && err != redis.Nil {
+		return false, err
+	}
+
+	if err == redis.Nil {
+		err = storage.Set(ctx, key, 1, rl.TTL)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if result >= rl.Limit {
+		return false, nil
+	}
+
+	err = storage.Incr(ctx, key)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func RateLimiterMiddleware(primary, secondary persistence.Storage) func(http.Handler) http.Handler {
+	limiter := NewRateLimiter(primary, secondary, 100, time.Minute)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
-			if strings.Contains(ip, ":") {
-				var err error
-				ip, _, err = net.SplitHostPort(r.RemoteAddr)
-				if err != nil {
-					log.Printf("Erro ao dividir o host e a porta: %v", err)
-					http.Error(w, "internal server error", http.StatusInternalServerError)
-					return
-				}
+			key := r.RemoteAddr
+			allowed, err := limiter.Allow(r.Context(), key)
+			if err != nil || !allowed {
+				http.Error(w, "you have reached the maximum number of requests or actions allowed within a certain time frame", http.StatusTooManyRequests)
+				return
 			}
 
-			token := r.Header.Get("API_KEY")
-
-			log.Printf("Requisição recebida de IP %s com token %s", ip, token)
-
-			if token != "" {
-				if !rl.AllowToken(token) {
-					log.Printf("Limite de requisições atingido para token %s", token)
-					http.Error(w, "you have reached the maximum number of requests or actions allowed within a certain time frame", http.StatusTooManyRequests)
-					return
-				}
-			} else {
-				if !rl.AllowIP(ip) {
-					log.Printf("Limite de requisições atingido para IP %s", ip)
-					http.Error(w, "you have reached the maximum number of requests or actions allowed within a certain time frame", http.StatusTooManyRequests)
-					return
-				}
-			}
 			next.ServeHTTP(w, r)
 		})
 	}
